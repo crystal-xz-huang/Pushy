@@ -1,0 +1,60 @@
+#!/bin/dash
+
+# print the contents of the specified filename as of the specified commit
+# if commit is not given, the contents of the file in the index is printed
+# usage: pushy-show [commit]:filename
+
+if [ ! -d ".pushy" ]; then
+    echo "pushy-show: error: pushy repository directory .pushy not found" >&2
+    exit 1
+fi
+
+if [ "$#" -ne 1 ]; then
+    echo "usage: pushy-show <commit>:<filename>" >&2
+    exit 1
+fi
+
+if [ -z "$1" ]; then
+    echo "usage: pushy-show <commit>:<filename>" >&2
+    exit 1
+elif ! echo "$1" | grep -q ":"; then
+    echo "usage: pushy-show <commit>:<filename>" >&2
+    exit 1
+fi
+
+commit_num=$(echo "$1" | cut -d':' -f1)
+filename=$(echo "$1" | cut -d':' -f2)
+
+# If no commit is given, use the index directory
+if [ -z "$commit_num" ]; then
+    COMMIT_DIR=".pushy/index"
+else
+    # Check if the commit exists
+    COMMIT_DIR=$(find .pushy/commits -mindepth 2 -maxdepth 2 -type d -name "$commit_num")
+    if [ -z "$COMMIT_DIR" ]; then
+        echo "pushy-show: error: unknown commit '$commit_num'" >&2
+        exit 1
+    else 
+        COMMIT_DIR=$(echo "$COMMIT_DIR" | head -n 1) 
+    fi
+fi
+
+# Check if the filename is valid
+if [ -z "$filename" ] || ! (echo "$filename" | grep -Eq '^[a-zA-Z0-9]+') || ! (echo "$filename" | grep -Eq '^[a-zA-Z0-9._-]+$'); then
+    echo "pushy-show: error: invalid filename '$filename'" >&2
+    exit 1
+fi
+
+# Check if the file exists in the commit directory or index
+if [ ! -f "$COMMIT_DIR/$filename" ]; then
+    if [ -z "$commit_num" ]; then
+        echo "pushy-show: error: '$filename' not found in index" >&2
+    else
+        echo "pushy-show: error: '$filename' not found in commit $commit_num" >&2
+    fi
+    exit 1
+fi
+
+cat "$COMMIT_DIR/$filename"
+
+exit 0

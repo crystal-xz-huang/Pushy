@@ -1,0 +1,135 @@
+#!/bin/dash
+
+# remove a file from the index or the current working directory and the index
+# usage: pushy-rm [--force] [--cached] filenames...
+#
+# no options    : remove from both the index and the working directory, given that there are no uncommitted changes
+# --force       : remove from both the index and the working directory, ignoring any uncommitted changes
+# --cached      : remove from the index only, leaving the file untracked in the working directory
+# both          : remove from index, ignoring any uncommitted changes (same as --force) and leave the file untracked in the working directory (same as --cached)
+
+if [ ! -d ".pushy" ]; then
+    echo "pushy-rm: error: pushy repository directory .pushy not found" >&2
+    exit 1
+fi
+
+if [ "$#" -eq 0 ]; then
+    echo "usage: pushy-rm [--force] [--cached] <filenames>" >&2
+    exit 1
+fi
+
+FORCE="unset"
+CACHED="unset"
+for arg in "$@"; do 
+    case "$arg" in
+    --force) 
+        FORCE="set"
+        ;;
+    --cached)
+        CACHED="set"
+        ;;
+    *) 
+        set -- "$@" "$arg"  
+        ;;
+    esac                    
+    shift                 
+done
+
+if [ "$#" -eq 0 ]; then
+    echo "usage: pushy-rm [--force] [--cached] <filenames>" >&2
+    exit 1
+elif echo "$@" | grep -Eq "^-.*"; then 
+    echo "usage: pushy-rm [--force] [--cached] <filenames>" >&2
+    exit 1
+fi 
+
+BRANCH=$(cat .pushy/HEAD)
+last_commit_num=$(cat .pushy/branches/"$BRANCH")
+if [ -z "$last_commit_num" ]; then
+    last_commit_num=-1
+fi
+
+# need to check all error cases before removing the files
+for file in "$@"; do
+
+    if echo "$file" | grep -E "^[._-]" > /dev/null || ! echo "$file" | grep -E "^[a-zA-Z0-9._-]+$" > /dev/null; then
+        echo "pushy-rm: error: invalid filename '$file'" >&2
+        exit 1
+    fi 
+
+    commit_file=".pushy/commits/$BRANCH/$last_commit_num/$file"
+    index_file=".pushy/index/$file"
+
+    if [ ! -f "$file" ]; then
+        # file not in working directory
+        echo "pushy-rm: error: '$file' is not in the pushy repository" >&2
+        exit 1
+    elif [ -f "$file" ] && [ ! -f "$index_file" ]; then
+        # file in working directory but not in the index 
+        echo "pushy-rm: error: '$file' is not in the pushy repository" >&2
+        exit 1
+    elif [ ! -f "$index_file" ] && [ ! -f "$commit_file" ]; then
+        # not in the index and not in the last commit
+        echo "pushy-rm: error: '$file' is not in the pushy repository" >&2
+        exit 1
+    fi
+
+    # consider the case if the file is in the index but is not in the last commit
+    if [ -f "$index_file" ] && [ ! -f "$commit_file" ]; then
+        if ! diff "$index_file" "$file" > /dev/null; then
+            # working directory file and index file are different 
+            if [ "$FORCE" = "unset" ]; then
+                echo "pushy-rm: error: '$file' in index is different to both the working file and the repository" >&2
+                exit 1
+            fi
+        else 
+            # working directory file and index file are the same
+            if [ "$FORCE" = "unset" ] && [ "$CACHED" = "unset" ]; then
+                # no option or --cached only (note that --cached with --force will override the error message)
+                echo "pushy-rm: error: '$file' has staged changes in the index" >&2
+                exit 1
+            fi
+        fi
+    fi
+
+    # consider the case if the file is in the index and is in the last commit
+    if [ -f "$index_file" ] && [ -f "$commit_file" ]; then
+        if ! diff "$index_file" "$file" > /dev/null && diff "$commit_file" "$index_file" > /dev/null; then
+            # cwd = index != commit
+            if [ "$FORCE" = "unset" ] && [ "$CACHED" = "unset" ]; then
+                # no option 
+                echo "pushy-rm: error: '$file' in the repository is different to the working file" >&2
+                exit 1
+            fi
+        fi
+
+        if ! diff "$index_file" "$file" > /dev/null && ! diff "$commit_file" "$index_file" > /dev/null; then
+            # cwd != index != commit
+            if [ "$FORCE" = "unset" ]; then
+                # no option 
+                echo "pushy-rm: error: '$file' in index is different to both the working file and the repository" >&2
+                exit 1
+            fi
+        fi 
+
+        if diff "$index_file" "$file" > /dev/null && ! diff "$commit_file" "$index_file" > /dev/null; then
+            # cwd = index != commit
+            if [ "$FORCE" = "unset" ] && [ "$CACHED" = "unset" ]; then
+                # no option 
+                echo "pushy-rm: error: '$file' has staged changes in the index" >&2
+                exit 1
+            fi
+        fi
+    fi
+done
+
+for file in "$@"; do
+    if [ "$CACHED" = "set" ]; then
+        rm -f .pushy/index/"$file"
+    else
+        rm -f .pushy/index/"$file"
+        rm -f "$file"
+    fi
+done
+
+exit 0

@@ -1,0 +1,22 @@
+#!/bin/dash
+
+# prints a line for every commit made to the pushy repository
+# each line shows the commit number and message
+
+# Check if .pushy directory is initialized
+if [ ! -d ".pushy" ]; then
+    echo "pushy-log: error: pushy repository directory .pushy not found"
+    exit 1
+fi
+
+# Check the number of arguments passed is 0
+if [ "$#" -ne 0 ]; then
+    echo "usage: pushy-log" >&2
+    exit 1
+fi
+
+# Print [commit number] [master] [commit message] for each commit 
+BRANCH=$(cat .pushy/HEAD)
+tac .pushy/logs/$BRANCH # tac prints the file in reverse order
+
+exit 0

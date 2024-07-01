@@ -1,0 +1,152 @@
+#!/bin/dash
+
+# pushy-branch: list all branches
+# pushy-branch [branch-name]: create a new branch
+# pushy-branch -d [branch-name]: delete a branch
+
+# check if the .pushy repository exists
+if [ ! -d ".pushy" ]; then
+    echo "pushy-branch: error: pushy repository directory .pushy not found" >&2
+    exit 1
+fi
+
+# check usage
+if [ "$#" -gt 2 ]
+then
+    echo "usage: pushy-branch [-d] <branch>" >&2
+    exit 1
+fi
+
+# check if there has been a commit 
+num_commits=$(find .pushy/commits/master -mindepth 1 -maxdepth 1 -type d | wc -l)
+if [ "$num_commits" -eq 0 ]
+then
+    echo "pushy-branch: error: this command can not be run until after the first commit" >&2
+    exit 1
+fi
+
+# pushy-branch command
+if [ "$#" -eq 0 ]
+then
+    # list all branches
+    find .pushy/branches -mindepth 1 -type f | sed 's/.*\///' | sort
+    exit 0
+fi
+
+# pushy-branch [branch-name] command
+if [ "$#" -eq 1 ] 
+then
+    branch="$1"
+
+    # check if the branchname is provided
+    if [ -z "$branch" ] || [ "$branch" = "-d" ]
+    then
+        echo "pushy-branch: error: branch name required" >&2
+        exit 1
+    fi
+
+    # check that the branchname does not start with a hyphen 
+    if echo "$branch" | grep -Eq '^-.+'
+    then
+        echo "usage: pushy-branch [-d] <branch>" >&2
+        exit 1
+    fi
+
+    # check if the branchname is valid (0 if valid, 1 if invalid)
+    valid_branchname1=$(echo "$branch" | grep -Ev '^[a-zA-Z0-9]' | wc -l)        # starts with an alphanumeric character
+    valid_branchname2=$(echo "$branch" | grep -Ev '^[a-zA-Z0-9_-]+$' | wc -l)    # contains only alphanumeric characters, hyphens, and underscores 
+    valid_branchname3=$(echo "$branch" | grep -E '^[0-9]+$' | wc -l)             # not entirely numeric 
+
+    if [ "$valid_branchname1" -ne 0 ] || [ "$valid_branchname2" -ne 0 ] || [ "$valid_branchname3" -ne 0 ]
+    then
+        echo "pushy-branch: error: invalid branch name '$branch'" >&2
+        exit 1
+    fi
+
+    # check if the branchname does not already exist
+    if [ -f ".pushy/branches/$branch" ]
+    then
+        echo "pushy-branch: error: branch '$branch' already exists" >&2
+        exit 1
+    fi
+    
+    # get the current branch we are on
+    CURRENT_BRANCH=$(cat .pushy/HEAD) 
+    
+    # create a new branch that is a copy of the current branch
+    touch ".pushy/branches/$branch"
+
+    # initialise the branch index and commit history directories
+    mkdir ".pushy/commits/$branch"  || echo "pushy-branch: error: failed to create commits directory" >&2
+    touch ".pushy/logs/$branch"     || echo "pushy-branch: error: failed to create logs file" >&2
+
+    # copy the current branch index, commit history, and logs to the new branch
+    cp ".pushy/branches/$CURRENT_BRANCH" ".pushy/branches/$branch"
+    cp -r ".pushy/commits/$CURRENT_BRANCH/." ".pushy/commits/$branch"
+    cp ".pushy/logs/$CURRENT_BRANCH" ".pushy/logs/$branch"
+
+    exit 0
+fi
+
+# pushy-branch -d [branch-name] command
+if [ "$#" -eq 2 ] && [ "$1" = "-d" ]
+then
+    branch="$2"
+
+    # check if the branchname is provided
+    if [ -z "$branch" ] || [ "$branch" = "-d" ]
+    then
+        echo "pushy-branch: error: branch name required" >&2
+        exit 1
+    fi
+
+    # check that the branchname does not start with a hyphen 
+    if echo "$branch" | grep -Eq '^-.+'
+    then
+        echo "usage: pushy-branch [-d] <branch>" >&2
+        exit 1
+    fi
+
+    # check if the branchname is valid
+    valid_branchname1=$(echo "$branch" | grep -Ev '^[a-zA-Z0-9]' | wc -l)        # starts with an alphanumeric character
+    valid_branchname2=$(echo "$branch" | grep -Ev '^[a-zA-Z0-9_-]+$' | wc -l)    # contains only alphanumeric characters, hyphens, and underscores 
+    valid_branchname3=$(echo "$branch" | grep -E '^[0-9]+$' | wc -l)             # not entirely numeric 
+
+    if [ "$valid_branchname1" -ne 0 ] || [ "$valid_branchname2" -ne 0 ] || [ "$valid_branchname3" -ne 0 ]
+    then
+        echo "pushy-branch: error: invalid branch name '$branch'" >&2
+        exit 1
+    fi
+
+    # check if the branch exists
+    if [ ! -f ".pushy/branches/$branch" ]
+    then
+        echo "pushy-branch: error: branch '$branch' doesn't exist" >&2
+        exit 1
+    fi
+
+    # check if given branch is not the master branch
+    if [ "$branch" = "master" ]
+    then
+        echo "pushy-branch: error: can not delete branch 'master': default branch" >&2
+        exit 1
+    fi
+
+    # check if the branch is the current branch
+    if [ "$(cat .pushy/HEAD)" = "$branch" ]
+    then
+        echo "pushy-branch: error: can not delete branch '$branch': current branch" >&2
+        exit 1
+    fi
+
+    # delete the branch
+    rm -rf ".pushy/branches/$branch"
+    rm -rf ".pushy/commits/$branch"
+    rm -rf ".pushy/logs/$branch"
+    echo "Deleted branch '$branch'"
+    exit 0
+fi
+
+# if the command is not valid, we are here
+echo "usage: pushy-branch [-d] <branch>" >&2
+exit 1

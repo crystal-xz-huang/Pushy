@@ -1,0 +1,171 @@
+#!/bin/dash
+
+# pushy-merge (branch-name|commit-number) -m message
+# adds the changes that have been made to the specified branch or commit to the index, and commits them.
+
+# check if .pushy directory exists
+if [ ! -d .pushy ]; then
+    echo "pushy-merge: error: pushy repository directory .pushy not found" >&2
+    exit 1
+fi
+
+# check if there has been a commit 
+num_commits=$(find .pushy/commits/master -mindepth 1 -maxdepth 1 -type d | wc -l)
+if [ "$num_commits" -eq 0 ]
+then
+    echo "pushy-merge: error: this command can not be run until after the first commit" >&2
+    exit 1
+fi
+
+# if first argument is not empty and does not start with a dash
+if [ -n "$1" ] && ! echo "$1" | grep -q '^-.*'; then
+
+    # if the number of arguments is 1
+    if [ "$#" -eq 1 ]; then
+        echo "pushy-merge: error: empty commit message" >&2
+        exit 1
+    fi
+
+    # if the number of arguments is not 3
+    if [ "$#" -ne 3 ]; then
+        echo "usage: pushy-merge <branch|commit> -m message" >&2
+        exit 1
+    fi
+
+    # if the second argument is not -m
+    if [ "$2" != "-m" ]; then
+        echo "usage: pushy-merge <branch|commit> -m message" >&2
+        exit 1
+    fi
+
+    valid_commit=$(echo "$1" | grep -Ev '^[0-9]+$' | wc -l)                 # entirely numeric
+    valid_branchname1=$(echo "$1" | grep -Ev '^[a-zA-Z0-9]' | wc -l)        # starts with alphanumeric character
+    valid_branchname2=$(echo "$1" | grep -Ev '^[a-zA-Z0-9_-]+$' | wc -l)    # only alphanumeric, - and _
+
+    # if the first argument is a number
+    if [ "$valid_commit" -eq 0 ]; then
+        # check if the commit exists
+        commits=$(find .pushy/commits -mindepth 2 -maxdepth 2 -type d -name "$1")
+        if [ -z "$commits" ]; then
+            echo "pushy-merge: error: unknown commit '$1'" >&2
+            exit 1
+        fi
+    else
+        # if the first argument is not a branch name
+        if [ "$valid_branchname1" -ne 0 ] || [ "$valid_branchname2" -ne 0 ]; then
+            echo "usage: pushy-merge <branch|commit> -m message" >&2
+            exit 1
+        fi
+
+        # if the branch does not exist
+        if [ ! -f ".pushy/branches/$1" ]; then
+            echo "pushy-merge: error: unknown branch '$1'" >&2
+            exit 1
+        fi
+    fi
+    
+else 
+    echo "usage: pushy-merge <branch|commit> -m message" >&2
+    exit 1
+fi
+
+# Add the changes that have been made to the specified branch or commit to the index
+# If a file has been changed in both branches pushy-merge produces an error message
+CURRENT_BRANCHNAME=$(cat .pushy/HEAD)
+CURRENT_BRANCH_LAST_COMMIT=$(cat .pushy/branches/$CURRENT_BRANCHNAME)
+CURRENT_BRANCH_COMMIT_DIR=".pushy/commits/$CURRENT_BRANCHNAME/$CURRENT_BRANCH_LAST_COMMIT"
+
+if [ "$valid_commit" -eq 0 ]; then
+    GIVEN_BRANCH_LAST_COMMIT="$1"
+    GIVEN_BRANCH_COMMIT_DIR=$(find .pushy/commits -mindepth 2 -maxdepth 2 -type d -name "$1")
+    if [ -z "$GIVEN_BRANCH_COMMIT_DIR" ]; then
+        echo "pushy-merge: error: unknown commit '$1'" >&2
+        exit 1
+    elif [ echo "$GIVEN_BRANCH_COMMIT_DIR" | wc -l -gt 1 ]; then
+        echo "pushy-merge: error: unknownn commit '$1'" >&2
+        exit 1
+    else 
+        GIVEN_BRANCHNAME=$(echo "$GIVEN_BRANCH_COMMIT_DIR" | cut -d '/' -f3)
+        GIVEN_BRANCH_LAST_COMMIT=$(echo "$GIVEN_BRANCH_COMMIT_DIR" | cut -d '/' -f4)
+    fi
+else
+    GIVEN_BRANCHNAME="$1"
+    GIVEN_BRANCH_LAST_COMMIT=$(cat .pushy/branches/"$1")
+    GIVEN_BRANCH_COMMIT_DIR=".pushy/commits/$1/$GIVEN_BRANCH_LAST_COMMIT"
+fi
+
+if diff -r "$GIVEN_BRANCH_COMMIT_DIR" "$CURRENT_BRANCH_COMMIT_DIR" > /dev/null; then
+    echo "Already up to date"
+    exit 0
+else 
+    CANNOT_MERGE=0 
+    for file in "$GIVEN_BRANCH_COMMIT_DIR"/*; do
+        file_name=$(basename "$file")
+        if [ -f "$CURRENT_BRANCH_COMMIT_DIR/$file_name" ]; then
+            diff=$(diff "$file" "$CURRENT_BRANCH_COMMIT_DIR/$file_name")
+            if [ -z "$diff" ]; then
+                CANNOT_MERGE=1
+                break
+            fi
+        fi
+    done
+
+    if [ $CANNOT_MERGE -eq 1 ]; then
+        echo "pushy-merge: error: These files can not be merged:" >&2
+        for file in "$GIVEN_BRANCH_COMMIT_DIR"/*; do
+            file_name=$(basename "$file")
+            if [ -f "$CURRENT_BRANCH_COMMIT_DIR/$file_name" ]; then
+                echo "$file_name" >&2
+            fi
+        done
+        exit 1
+    fi
+fi
+
+if [ "$GIVEN_BRANCH_LAST_COMMIT" -ge "$CURRENT_BRANCH_LAST_COMMIT" ]; then
+    cp -r "$GIVEN_BRANCH_COMMIT_DIR"/* ".pushy/index"
+    echo "Fast-forward: no commit created"
+    exit 0
+elif [ "$GIVEN_BRANCH_LAST_COMMIT" -lt "$CURRENT_BRANCH_LAST_COMMIT" ]; then
+    NEW_COMMIT=$((CURRENT_BRANCH_LAST_COMMIT + 1))
+    
+    # update the index and working directory to contain the changes of the given branch
+    cp -r $GIVEN_BRANCH_COMMIT_DIR/* ".pushy/index"
+    cp -r $GIVEN_BRANCH_COMMIT_DIR/* . 
+
+    # copy the log of the given commit to the current branch log
+    cat ".pushy/logs/$GIVEN_BRANCHNAME" | while read line; do
+        if echo "$line" | grep -q 'merge'; then
+            # get the next merge number
+            merge_number=$(echo "$line" | sed 's/[^0-9]*//g')
+            merge_number=$((merge_number + 1))
+        else
+            # get the commit number
+            commit_number=$(echo "$line" | cut -d' ' -f1)
+            if [ "$commit_number" -eq "$GIVEN_BRANCH_LAST_COMMIT" ]; then
+                echo "$line" >> ".pushy/logs/$CURRENT_BRANCHNAME"
+            fi
+        fi
+    done
+
+    # sort the log file
+    cat ".pushy/logs/$CURRENT_BRANCHNAME" | sort -n > ".pushy/logs/$CURRENT_BRANCHNAME.tmp"
+    mv ".pushy/logs/$CURRENT_BRANCHNAME.tmp" ".pushy/logs/$CURRENT_BRANCHNAME"
+    rm -f ".pushy/logs/$CURRENT_BRANCHNAME.tmp"
+
+    if [ -z "$merge_number" ]; then
+        merge_number=1
+    fi
+
+    # add the new commit to the commits directory
+    mkdir -p ".pushy/commits/$CURRENT_BRANCHNAME/$NEW_COMMIT"
+    cp -r $CURRENT_BRANCH_COMMIT_DIR/* ".pushy/commits/$CURRENT_BRANCHNAME/$NEW_COMMIT"
+    cp -r $GIVEN_BRANCH_COMMIT_DIR/* ".pushy/commits/$CURRENT_BRANCHNAME/$NEW_COMMIT"
+    echo "$NEW_COMMIT merge$merge_number" >> ".pushy/logs/$CURRENT_BRANCHNAME"
+    echo "Committed as commit $NEW_COMMIT"
+
+    # update the current branch to the new commit
+    echo "$NEW_COMMIT" > .pushy/branches/$CURRENT_BRANCHNAME
+
+fi
+

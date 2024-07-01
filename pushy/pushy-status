@@ -1,0 +1,144 @@
+#!/bin/dash
+
+# Show the status of files in the current directory, index, and the repository
+# Usage: pushy-status
+
+if [ ! -d .pushy ]; then
+    echo "pushy-status: error: pushy repository directory .pushy not found" >&2
+    exit 1
+fi
+
+if [ $# -ne 0 ]; then
+    echo "usage: pushy-status" >&2
+    exit 1
+fi
+
+BRANCH=$(cat .pushy/HEAD)
+last_commit_num=$(cat .pushy/branches/"$BRANCH")
+COMMIT_DIR=".pushy/commits/$BRANCH/$last_commit_num"
+INDEX_DIR=".pushy/index"
+
+REPO_FILES=$(find .pushy/commits/"$BRANCH"/"$last_commit_num" -mindepth 1 -type f -exec basename {} \; | sort) 
+INDEX_FILES=$(find .pushy/index -mindepth 1 -type f -exec basename {} \; | sort)
+CWD_FILES=$(find . -maxdepth 1 -type f -exec basename {} \; | grep -Ev ".*.sh" | sort)
+ALL_FILES=$(echo "$CWD_FILES\n$REPO_FILES\n$INDEX_FILES" | sort | uniq)
+
+is_file_in_repo() {
+    if [ -z "$last_commit_num" ]; then
+        return 1
+    fi
+    FILE=$1
+    if [ -f "$COMMIT_DIR/$FILE" ]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+is_file_in_index() {
+    FILE=$1
+    if [ -f "$INDEX_DIR/$FILE" ]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+is_file_in_cwd() {
+    FILE=$1
+    if [ -f "$FILE" ]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+for file in $ALL_FILES; do 
+    commit_file=".pushy/commits/$BRANCH/$last_commit_num/$file"
+    index_file=".pushy/index/$file"
+
+    # file is not in the last commit, index, or cwd
+    if ! is_file_in_repo "$file" && ! is_file_in_index "$file" && ! is_file_in_cwd "$file"; then
+        continue
+    fi
+
+    # file in cwd only
+    if is_file_in_cwd "$file" && ! is_file_in_index "$file" && ! is_file_in_repo "$file"; then
+        echo "$file - untracked"
+        continue
+    fi
+
+    # file in index only
+    if is_file_in_index "$file" && ! is_file_in_repo "$file" && ! is_file_in_cwd "$file"; then
+        echo "$file - added to index, file deleted"
+        continue
+    fi
+
+    # file in last commit only
+    if is_file_in_repo "$file" && ! is_file_in_index "$file" && ! is_file_in_cwd "$file"; then
+        echo "$file - file deleted, deleted from index"
+        continue
+    fi
+
+    # file in cwd and index only
+    if is_file_in_index "$file" && is_file_in_cwd "$file" && ! is_file_in_repo "$file"; then
+        if diff "$file" "$index_file" > /dev/null; then
+            echo "$file - added to index"
+        else
+            echo "$file - added to index, file changed"
+        fi
+        continue
+    fi
+    
+    # file in index and repo only
+    if is_file_in_index "$file" && is_file_in_repo "$file" && ! is_file_in_cwd "$file"; then
+        echo "$file - file deleted"
+        continue
+    fi
+
+    # file in cwd and repo only
+    if is_file_in_cwd "$file" && is_file_in_repo "$file" && ! is_file_in_index "$file"; then
+        echo "$file - deleted from index"
+        continue
+    fi
+
+    # file in repo, index, and cwd 
+    if is_file_in_index "$file" && is_file_in_repo "$file" && is_file_in_cwd "$file"; then     
+        diff_cwd_index=$(diff "$file" "$index_file" > /dev/null; echo $?)  # 0 if no difference, 1 if different   
+        diff_index_repo=$(diff "$commit_file" "$index_file" > /dev/null; echo $?) 
+        diff_cwd_repo=$(diff "$file" "$commit_file" > /dev/null; echo $?) 
+
+        # cwd = index = repo
+        if [ "$diff_cwd_index" -eq 0 ] && [ "$diff_index_repo" -eq 0 ] && [ "$diff_cwd_repo" -eq 0 ]
+        then
+            echo "$file - same as repo"
+            continue
+        fi
+
+        # cwd =/= index 
+        if [ "$diff_cwd_index" -eq 1 ]
+        then 
+            # cwd =/= index =/= repo
+            if [ "$diff_index_repo" -eq 1 ]
+            then
+                echo "$file - file changed, different changes staged for commit"
+                continue
+            fi
+
+            # cwd =/= index = repo
+            if [ "$diff_index_repo" -eq 0 ]
+            then
+                echo "$file - file changed, changes not staged for commit"
+                continue
+            fi
+        fi
+
+        # index =/= repo
+        if [ "$diff_index_repo" -eq 1 ]; then
+            echo "$file - file changed, changes staged for commit"
+            continue
+        fi
+    fi
+done
+
+exit 0

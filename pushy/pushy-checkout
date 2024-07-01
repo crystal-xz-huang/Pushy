@@ -1,0 +1,104 @@
+#!/bin/dash
+
+# pushy-checkout branch-name
+# switches to the branch with the given name
+# unlike git checkout, cannot specify a commit or file
+
+# check if .pushy directory exists
+if [ ! -d .pushy ]; then
+    echo "pushy-checkout: error: pushy repository directory .pushy not found" >&2
+    exit 1
+fi
+
+# check if there has been a commit 
+num_commits=$(find .pushy/commits/master -mindepth 1 -maxdepth 1 -type d | wc -l)
+if [ "$num_commits" -eq 0 ]
+then
+    echo "pushy-checkout: error: this command can not be run until after the first commit" >&2
+    exit 1
+fi
+
+# check usage
+if [ $# -ne 1 ] || [ $# -gt 1 ] || echo "$1" | grep -Eq '^-.+'; then
+    echo "usage: pushy-checkout <branch>" >&2
+    exit 1
+fi
+
+CURRENT_BRANCH=$(cat .pushy/HEAD)
+NEW_BRANCH=$1
+
+# check if branch directory exists
+if [ ! -f .pushy/branches/$NEW_BRANCH ]; then
+    echo "pushy-checkout: error: unknown branch '$NEW_BRANCH'" >&2
+    exit 1
+fi
+
+# check if this branch is already checked out
+if [ "$CURRENT_BRANCH" = "$NEW_BRANCH" ]; then
+    echo "Already on '$NEW_BRANCH'"
+    exit 0
+fi
+
+
+CURRENT_BRANCH_LAST_COMMIT=$(cat .pushy/branches/$CURRENT_BRANCH)
+CURRENT_BRANCH_COMMITS=".pushy/commits/$CURRENT_BRANCH/$CURRENT_BRANCH_LAST_COMMIT"
+NEW_BRANCH_LAST_COMMIT=$(cat .pushy/branches/$NEW_BRANCH)
+NEW_BRANCH_COMMITS=".pushy/commits/$NEW_BRANCH/$NEW_BRANCH_LAST_COMMIT"
+
+# Create a file to store files that will be overwritten by checkout
+if [ -f .pushy/CHECKOUT_CONFLICTS ]; then
+    rm .pushy/CHECKOUT_CONFLICTS
+fi
+touch .pushy/CHECKOUT_CONFLICTS
+
+# Check if there are any files in the working directory that will be overwritten by checkout
+ERROR=0
+for file in *; do
+    # if a file in the working directory has been modified in the current branch 
+    if [ -f $CURRENT_BRANCH_COMMITS/$file ] && ! diff -q $file $CURRENT_BRANCH_COMMITS/$file > /dev/null; then
+        echo $file >> .pushy/CHECKOUT_CONFLICTS
+        ERROR=1
+    fi
+
+    # if a file in the working directory has been removed in the new branch, add it to the list of files that will be overwritten by checkout
+    if [ -f $CURRENT_BRANCH_COMMITS/$file ] && [ ! -f $NEW_BRANCH_COMMITS/$file ]; then
+        echo $file >> .pushy/CHECKOUT_CONFLICTS
+        ERROR=1
+    fi
+done
+
+if [ $ERROR -eq 1 ]; then
+    echo "pushy-checkout: error: Your changes to the following files would be overwritten by checkout:"
+    cat .pushy/CHECKOUT_CONFLICTS
+    exit 1
+fi
+
+# Delete all files in the working directory that correspond to files in the current branch's recent commit
+if [ -n "$DIFF" ]; then
+    for file in *; do
+        if [ -f $CURRENT_BRANCH_COMMITS/$file ]; then
+            # if the file in the current branch's recent commit is the same as the file in the working directory, delete the file
+            if diff -q $file $CURRENT_BRANCH_COMMITS/$file > /dev/null; then
+                rm $file
+                rm .pushy/index/$file
+            fi
+        fi
+    done
+fi
+
+# Copy all files from the new branch's recent commit to the working directory
+for file in $(find $NEW_BRANCH_COMMITS -type f); do
+    # if the file does not exist in the working directory, copy the file
+    file_name=$(basename $file)
+    if [ ! -f $file_name ]; then
+        cp $file $file_name
+        cp $file .pushy/index/$file_name
+    fi
+done
+
+# change to the new branch
+echo $NEW_BRANCH > .pushy/HEAD
+echo "Switched to branch '$NEW_BRANCH'"
+exit 0  
+
+

@@ -1,0 +1,51 @@
+#!/bin/dash
+
+# Adds the contents of one or more files in the current working directory to the index
+# Usage: pushy-add FILENAMES...
+
+# Check that .pushy directory exists in the current directory
+if [ ! -d ".pushy" ]; then
+    echo "pushy-add: error: pushy repository directory .pushy not found" >&2
+    exit 1
+fi
+
+# Check that the number of arguments is at least 1
+if [ "$#" -eq 0 ]; then
+    echo "usage: pushy-add <filenames>" >&2
+    exit 1
+fi
+
+# Get the current branch
+branch=$(cat .pushy/HEAD)
+INDEX_DIR=".pushy/index"
+
+# Check that the files exists in the cwd or in the index
+for file in "$@"; do
+    if echo "$file" | grep -q '/' || echo "$file" | grep -Eq "^[._-]" || echo "$file" | grep -Eqv "^[a-zA-Z0-9._-]+$"
+    then
+        echo "pushy-add: error: invalid filename '$file'" >&2
+        exit 1        
+    elif [ -d "$file" ]
+    then
+        echo "pushy-add: error: '$file' is not a regular file" >&2
+        exit 1
+    elif [ ! -f "$file" ] && [ ! -f "$INDEX_DIR/$file" ]
+    then
+        # if file is not tracked (not in cwd, index) then it is an error
+        echo "pushy-add: error: can not open '$file'" >&2
+        exit 1
+    fi
+done
+
+# Add the files to the index if they are in the cwd 
+for file in "$@"; do
+    if [ ! -f "$file" ] && [ -f "$INDEX_DIR/$file" ]; then
+        # if the file is not in the current directory but is in the index, remove it from the index
+        rm -f "$INDEX_DIR/$file"  || exit 1
+    elif [ -f "$file" ]; then 
+        # otherwise, if the file is in the current directory, add it to the index
+        cp "$file" "$INDEX_DIR/$file" || exit 1
+    fi
+done
+
+exit 0

@@ -1,0 +1,34 @@
+#!/bin/dash
+
+# Creates an empty Pushy repository 
+
+if [ "$#" -ne 0 ]; then
+    # If the number of arguments is not 0, produce an error message to stderr and exit with a non-zero status
+    echo "usage: pushy-init" >&2
+    exit 1
+elif [ -d ".pushy" ]; then
+    # If .pushy file already exists, send an error message to stderr and exit with a non-zero status
+    echo "pushy-init: error: .pushy already exists" >&2
+    exit 1
+else
+    # If .pushy does not exist, create a new .pushy directory
+    mkdir ".pushy" || exit 1
+
+    # Create subdirectories and files 
+    mkdir ".pushy/branches"         || exit 1
+    mkdir ".pushy/index"            || exit 1
+    mkdir ".pushy/commits"          || exit 1
+    mkdir ".pushy/logs"             || exit 1
+    touch ".pushy/HEAD"             || exit 1
+    touch ".pushy/COMMIT_EDITMSG"   || exit 1
+    
+    # Create the initial files/directories for the master branch
+    mkdir ".pushy/commits/master"   || exit 1
+    touch ".pushy/logs/master"      || exit 1
+    touch ".pushy/branches/master"  || exit 1
+    echo "master" > ".pushy/HEAD"   || exit 1
+
+    echo "Initialized empty pushy repository in .pushy"
+    exit 0
+fi
+
